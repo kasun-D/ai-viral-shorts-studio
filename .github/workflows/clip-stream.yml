@@ -1,1 +1,159 @@
+name: AI Viral Shorts Studio v2 (Multi-Genre)
+
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: "YouTube URL (Livestream VOD OR Normal Video — Gaming, Podcast, Horror, Comedy)"
+        required: true
+        type: string
+      genre:
+        description: "Content Genre (leave on 'auto' to let AI detect it)"
+        required: false
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - gaming
+          - podcast
+          - comedy
+          - horror
+          - entertainment
+      layout:
+        description: "9:16 Layout ('auto' picks best layout for the detected genre)"
+        required: false
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - blur_stack
+          - auto_face_track
+          - split_facecam
+          - center_crop
+      enable_voiceover:
+        description: "Add Kokoro-82M Commercial-Safe AI Voiceover Hook (2-3s intro)"
+        required: false
+        default: false
+        type: boolean
+      num_clips:
+        description: "How many viral Shorts to generate (e.g. 5)"
+        required: false
+        default: "5"
+        type: string
+      clip_duration:
+        description: "Length of each Short in seconds (30 to 50)"
+        required: false
+        default: "45"
+        type: string
+      chat_lag_seconds:
+        description: "Livestream chat delay offset in seconds (ignored for normal videos)"
+        required: false
+        default: "18"
+        type: string
+      facecam_corner:
+        description: "Facecam corner (only used if layout = split_facecam)"
+        required: false
+        default: "bottom_right"
+        type: choice
+        options:
+          - bottom_right
+          - bottom_left
+          - top_right
+          - top_left
+      gdrive_folder:
+        description: "Optional Google Drive folder name (leave blank to download ZIP from GitHub)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+  models: read
+
+jobs:
+  generate-viral-shorts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout repository (includes self-learning training_feedback.csv)
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Commercial-Safe Open-Source Stack
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          pip install --quiet --upgrade \
+            yt-dlp faster-whisper opencv-python-headless numpy scikit-learn joblib scenedetect
+
+      - name: Optional — Install Kokoro-82M AI Voiceover (Apache 2.0)
+        if: ${{ inputs.enable_voiceover }}
+        run: |
+          sudo apt-get install -y -qq espeak-ng
+          pip install --quiet kokoro soundfile
+
+      - name: Optional — Prepare YouTube Cookies Secret (if configured)
+        if: ${{ secrets.YT_COOKIES != '' }}
+        env:
+          YT_COOKIES_CONTENT: ${{ secrets.YT_COOKIES }}
+        run: |
+          printf "%s" "$YT_COOKIES_CONTENT" > cookies.txt
+
+      - name: Run Universal AI Viral Clipper v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          EXTRA_FLAGS=""
+          if [ "${{ inputs.enable_voiceover }}" = "true" ]; then
+            EXTRA_FLAGS="$EXTRA_FLAGS --enable-voiceover"
+          fi
+          if [ -f cookies.txt ]; then
+            EXTRA_FLAGS="$EXTRA_FLAGS --cookies cookies.txt"
+          fi
+
+          python3 viral_clipper.py \
+            --url "${{ inputs.youtube_url }}" \
+            --genre "${{ inputs.genre }}" \
+            --layout "${{ inputs.layout }}" \
+            --facecam-corner "${{ inputs.facecam_corner }}" \
+            --num-clips "${{ inputs.num_clips }}" \
+            --clip-duration "${{ inputs.clip_duration }}" \
+            --chat-lag "${{ inputs.chat_lag_seconds }}" \
+            --whisper-model "base" \
+            --out-dir "output_shorts" \
+            $EXTRA_FLAGS
+
+      - name: Save Updated Self-Learning Feedback Log to Repo
+        run: |
+          if [ -f training_feedback.csv ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add training_feedback.csv
+            git diff --staged --quiet || git commit -m "Log clip features for AI self-learning"
+            git push || true
+          fi
+
+      - name: Upload Finished Shorts to GitHub (1-Click ZIP Download)
+        uses: actions/upload-artifact@v4
+        with:
+          name: viral-shorts-pack
+          path: output_shorts/
+          retention-days: 14
+
+      - name: Optional — Auto-Sync Finished Shorts to Google Drive via rclone
+        if: ${{ inputs.gdrive_folder != '' && secrets.RCLONE_CONFIG != '' }}
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          mkdir -p ~/.config/rclone
+          printf "%s" "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+          rclone copy output_shorts/ "gdrive:${{ inputs.gdrive_folder }}" --progress
 
