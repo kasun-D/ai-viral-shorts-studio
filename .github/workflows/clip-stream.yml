@@ -1,11 +1,17 @@
-name: AI Viral Shorts Studio v2 (Multi-Genre)
+name: AI Viral Shorts Studio v2 (Google Drive + YouTube)
 
 on:
   workflow_dispatch:
     inputs:
+      gdrive_video_url:
+        description: "Google Drive Video Link (Share -> Anyone with the link)"
+        required: false
+        default: ""
+        type: string
       youtube_url:
-        description: "YouTube URL (Livestream VOD OR Normal Video — Gaming, Podcast, Horror, Comedy)"
-        required: true
+        description: "Optional YouTube URL (leave blank if using Google Drive link above)"
+        required: false
+        default: ""
         type: string
       genre:
         description: "Content Genre (leave on 'auto' to let AI detect it)"
@@ -46,7 +52,7 @@ on:
         default: "45"
         type: string
       chat_lag_seconds:
-        description: "Livestream chat delay offset in seconds (ignored for normal videos)"
+        description: "Livestream chat delay offset in seconds (only used if YouTube live URL given)"
         required: false
         default: "18"
         type: string
@@ -61,7 +67,7 @@ on:
           - top_right
           - top_left
       gdrive_folder:
-        description: "Optional Google Drive folder name (leave blank to download ZIP from GitHub)"
+        description: "Optional Google Drive output folder (leave blank to download ZIP from GitHub)"
         required: false
         default: ""
         type: string
@@ -79,6 +85,11 @@ jobs:
       - name: Checkout repository (includes self-learning training_feedback.csv)
         uses: actions/checkout@v4
 
+      - name: Free Extra Disk Space for Large Google Drive Videos
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -89,13 +100,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
           pip install --quiet --upgrade \
-            yt-dlp faster-whisper opencv-python-headless numpy scikit-learn joblib scenedetect
+            gdown yt-dlp faster-whisper opencv-python-headless numpy scikit-learn joblib scenedetect
 
       - name: Optional — Install Kokoro-82M AI Voiceover (Apache 2.0)
         if: ${{ inputs.enable_voiceover }}
         run: |
           sudo apt-get install -y -qq espeak-ng
           pip install --quiet kokoro soundfile
+
+      - name: Download Video from Google Drive (if Google Drive link provided)
+        if: ${{ inputs.gdrive_video_url != '' }}
+        run: |
+          gdown --fuzzy "${{ inputs.gdrive_video_url }}" -O input_video.mp4
+          ls -lh input_video.mp4
 
       - name: Optional — Prepare YouTube Cookies Secret (if configured)
         env:
@@ -112,6 +129,12 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           EXTRA_FLAGS=""
+          if [ -f input_video.mp4 ]; then
+            EXTRA_FLAGS="$EXTRA_FLAGS --video-path input_video.mp4"
+          fi
+          if [ -n "${{ inputs.youtube_url }}" ]; then
+            EXTRA_FLAGS="$EXTRA_FLAGS --url ${{ inputs.youtube_url }}"
+          fi
           if [ "${{ inputs.enable_voiceover }}" = "true" ]; then
             EXTRA_FLAGS="$EXTRA_FLAGS --enable-voiceover"
           fi
@@ -119,8 +142,12 @@ jobs:
             EXTRA_FLAGS="$EXTRA_FLAGS --cookies cookies.txt"
           fi
 
+          if [ ! -f input_video.mp4 ] && [ -z "${{ inputs.youtube_url }}" ]; then
+            echo "ERROR: Please provide either a Google Drive video link or a YouTube URL."
+            exit 1
+          fi
+
           python3 viral_clipper.py \
-            --url "${{ inputs.youtube_url }}" \
             --genre "${{ inputs.genre }}" \
             --layout "${{ inputs.layout }}" \
             --facecam-corner "${{ inputs.facecam_corner }}" \
