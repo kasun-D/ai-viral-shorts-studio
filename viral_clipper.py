@@ -928,10 +928,20 @@ def main() -> None:
     if args.url:
         _, chat_path, info_data = fetch_metadata_chat_comments(args.url, work_dir, args.cookies)
 
-    duration_sec = float(info_data.get("duration") or 0.0)
-    video_id = str(info_data.get("id") or "local_video")
-    video_title = str(info_data.get("title") or "Viral Clip")
     local_video = Path(args.video_path) if args.video_path else None
+    duration_sec = float(info_data.get("duration") or 0.0)
+    if duration_sec <= 0 and local_video and local_video.exists():
+        probe = run_cmd(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(local_video)],
+            check=False, capture=True
+        )
+        try:
+            duration_sec = float((probe.stdout or "0").strip())
+        except ValueError:
+            duration_sec = 0.0
+    video_id = str(info_data.get("id") or (local_video.stem if local_video else "local_video"))
+    video_title = str(info_data.get("title") or (local_video.stem.replace("_", " ") if local_video else "Viral Clip"))
 
     chat_buckets: Dict[int, float] = {}
     chat_samples: Dict[int, List[str]] = {}
